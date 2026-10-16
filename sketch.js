@@ -1,0 +1,267 @@
+// Ruleta con las manos — p5.js + ml5.js HandPose + Web Audio API nativa
+// Especificaciones: ver spec.md
+
+let video;
+let handpose;
+let predictions = [];
+
+// Sonido con Web Audio API nativa (sin p5.sound)
+let audioCtx;
+let osc;
+let gainNode;
+let isSoundPlaying = false;
+
+// Posición de la ruleta (sigue la mano)
+let wheelX, wheelY;
+let targetX, targetY;
+let wheelRadius = 140;
+let numSegments = 8;
+
+// Rotación
+let angle = 0;
+let rotationSpeed = 0;
+let targetSpeed = 0;
+let friction = 0.96;
+let minSpeed = 0.005;
+
+// Estados
+let isSpinning = false;
+let handOpen = false;
+let winnerIndex = null;
+let calculatingWinner = false;
+
+let colors = [
+  '#FF6B6B', // coral tropical
+  '#4ECDC4', // turquesa tropical
+  '#45B7D1', // azul cielo tropical
+  '#FFA07A', // salmón claro
+  '#98D8C8', // menta
+  '#F7DC6F', // amarillo sol tropical
+  '#BB8FCE', // orquídea
+  '#58D68D'  // verde esmeralda
+];
+
+let segmentLabels = [1, 2, 3, 4, 5, 6, 7, 8];
+
+function preload() {
+  // Opcional: cargar sonido externo si existe
+  // sound = loadSound('assets/sound/ruleta.mp3');
+}
+
+function setup() {
+  createCanvas(640, 480);
+
+  video = createCapture(VIDEO, videoReady);
+  video.size(640, 480);
+  video.hide();
+
+  handpose = ml5.handpose(video, modelReady);
+  handpose.on('predict', gotResults);
+
+  wheelX = width / 2;
+  wheelY = height / 2;
+  targetX = wheelX;
+  targetY = wheelY;
+
+  // Inicializar contexto de audio nativo (lazy init en primer gesto)
+  audioCtx = null;
+}
+
+function videoReady() {
+  console.log('Video listo');
+}
+
+function modelReady() {
+  console.log('Modelo HandPose listo');
+}
+
+function gotResults(results) {
+  predictions = results;
+}
+
+function draw() {
+  background('#1a1a2e');
+
+  // Dibujar video espejado (selfie-view)
+  push();
+  translate(width, 0);
+  scale(-1, 1);
+  image(video, 0, 0, width, height);
+  pop();
+
+  // Procesar detección de manos (ml5 HandPose usa landmarks, no keypoints)
+  if (predictions.length > 0 && predictions[0].landmarks) {
+    let landmarks = predictions[0].landmarks;
+
+    let wrist = landmarks[0];      // muñeca
+    let indexTip = landmarks[8];   // punta del índice
+    let indexBase = landmarks[5];  // base del índice (metacarpiano)
+
+    // Detectar si la mano está abierta o cerrada
+    // Ratio: distancia punta-muñeca vs base-muñeca.
+    // Mano abierta: el índice se extiende (ratio alto).
+    // Mano cerrada: el índice está doblado (ratio bajo).
+    let handSize = dist(wrist[0], wrist[1], indexBase[0], indexBase[1]);
+    let fingerLength = dist(wrist[0], wrist[1], indexTip[0], indexTip[1]);
+    let ratio = handSize > 0 ? fingerLength / handSize : 0;
+
+    handOpen = ratio > 1.15; // umbral ajustable según distancia a la cámara
+
+    // Posición de la ruleta: sigue la muñeca en espacio espejado
+    targetX = width - wrist[0];
+    targetY = wrist[1];
+
+    // Suavizado del movimiento para que no sea brusco
+    wheelX = lerp(wheelX, targetX, 0.15);
+    wheelY = lerp(wheelY, targetY, 0.15);
+  }
+
+  // Lógica de rotación de la ruleta
+  if (handOpen && !isSpinning) {
+    isSpinning = true;
+    rotationSpeed = 0;
+    targetSpeed = random(0.08, 0.18);
+    startSound();
+    winnerIndex = null;
+    calculatingWinner = false;
+  }
+
+  if (!handOpen && isSpinning) {
+    isSpinning = false;
+    targetSpeed = 0;
+    calculatingWinner = true;
+  }
+
+  // Aplicar aceleración o fricción
+  if (isSpinning) {
+    rotationSpeed = lerp(rotationSpeed, targetSpeed, 0.05);
+  } else {
+    rotationSpeed *= friction;
+    if (abs(rotationSpeed) < minSpeed) {
+      rotationSpeed = 0;
+      if (calculatingWinner) {
+        calculateWinner();
+        calculatingWinner = false;
+        stopSound();
+      }
+    }
+  }
+
+  angle += rotationSpeed;
+
+  // Dibujar ruleta
+  drawWheel();
+
+  // Dibujar puntero indicador (parte superior)
+  drawPointer();
+
+  // Dibujar interfaz de usuario
+  drawUI();
+}
+
+function ensureAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+    gainNode = audioCtx.createGain();
+    gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    osc.start();
+  }
+}
+
+function startSound() {
+  if (!isSoundPlaying) {
+    ensureAudioCtx();
+    gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    isSoundPlaying = true;
+  }
+}
+
+function stopSound() {
+  if (isSoundPlaying && audioCtx) {
+    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    isSoundPlaying = false;
+  }
+}
+
+function drawWheel() {
+  push();
+  translate(wheelX, wheelY);
+  rotate(angle);
+
+  let segmentAngle = TWO_PI / numSegments;
+
+  for (let i = 0; i < numSegments; i++) {
+    fill(colors[i]);
+    stroke('#ffffff');
+    strokeWeight(2);
+    arc(0, 0, wheelRadius * 2, wheelRadius * 2,
+        i * segmentAngle, (i + 1) * segmentAngle, PIE);
+  }
+
+  // Círculo central
+  fill('#ffffff');
+  noStroke();
+  ellipse(0, 0, 30, 30);
+
+  pop();
+}
+
+function drawPointer() {
+  // Puntero fijo en la parte superior del canvas (12 en punto)
+  let px = wheelX;
+  let py = wheelY - wheelRadius - 20;
+
+  // Triángulo indicador
+  push();
+  translate(px, py);
+  fill('#ffffff');
+  noStroke();
+  triangle(-10, 10, 10, 10, 0, -10);
+  pop();
+
+  // Línea hacia la ruleta
+  stroke('#ffffff');
+  strokeWeight(2);
+  line(wheelX, wheelY - wheelRadius, wheelX, wheelY - wheelRadius - 10);
+  noStroke();
+}
+
+function calculateWinner() {
+  if (rotationSpeed !== 0) return;
+
+  let segmentAngle = TWO_PI / numSegments;
+  // El puntero está en la parte superior: ángulo -PI/2 en coordenadas p5
+  // Normalizamos el ángulo actual y calculamos qué segmento está bajo el puntero
+  let normAngle = ((angle % TWO_PI) + TWO_PI) % TWO_PI;
+  let relative = (-PI / 2 - normAngle + TWO_PI) % TWO_PI;
+  winnerIndex = floor(relative / segmentAngle) % numSegments;
+}
+
+function drawUI() {
+  fill('#ffffff');
+  noStroke();
+  textSize(18);
+  textAlign(LEFT, TOP);
+
+  let status = handOpen ? 'MANO ABIERTA — Girando' : 'MANO CERRADA — Detenida';
+  text('Estado: ' + status, 20, 20);
+
+  if (winnerIndex !== null) {
+    text('Segmento ganador: ' + segmentLabels[winnerIndex], 20, 50);
+  }
+
+  textSize(14);
+  text('Mueva su mano para mover la ruleta', 20, height - 40);
+  text('Abra la mano para girar, ciérrela para parar', 20, height - 20);
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  wheelX = width / 2;
+  wheelY = height / 2;
+}

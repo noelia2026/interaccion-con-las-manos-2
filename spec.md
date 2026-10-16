@@ -12,7 +12,7 @@ Quiero realizar una interacción con las manos y la cámara de mi computador, en
 
 - **p5.js**: canvas, bucle de animación (`draw`), dibujo de la ruleta y manejo de estados de la aplicación.
 - **ml5.js**: modelo **HandPose** para detección de manos y gestos en tiempo real (abierta/cerrada y coordenadas de la mano).
-- **p5.sound**: reproducción de audio mientras la ruleta gira.
+- **Web Audio API nativa**: reproducción de audio mientras la ruleta gira (sin librerías de sonido externas).
 - **HTML5 + CSS**: contenedor del canvas y estilos mínimos.
 
 ## Requisitos funcionales
